@@ -1,0 +1,26 @@
+From e83d920aafa92df9bda7dad606d401dda1ba722d Mon Sep 17 00:00:00 2001
+From: Petter Strandmark <petter.strandmark@gmail.com>
+Date: Mon, 27 Apr 2020 00:53:00 +0200
+Subject: [PATCH] Fix test for nightly Python (3.9) (#532)
+
+* Fix test for nightly Python (3.9)
+
+* allow_failures: true for nightly
+
+Co-authored-by: Anthony Sottile <asottile@umich.edu>
+---
+ .travis.yml               | 5 +++++
+ pyflakes/test/test_api.py | 2 ++
+ 2 files changed, 7 insertions(+)
+
+--- a/pyflakes/test/test_api.py
++++ b/pyflakes/test/test_api.py
+@@ -449,6 +449,8 @@
+         with self.makeTempFile(source) as sourcePath:
+             if PYPY:
+                 message = 'end of file (EOF) while scanning triple-quoted string literal'
++            elif sys.version_info >= (3, 9):
++                message = 'invalid string prefix'
+             else:
+                 message = 'invalid syntax'
+ 

@@ -1,0 +1,51 @@
+Source: pyflakes
+Section: python
+Priority: optional
+Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Uploaders: Varun Hiremath <varun@debian.org>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all,
+               python3-nose,
+               python3-setuptools
+Standards-Version: 4.5.0
+Homepage: https://launchpad.net/pyflakes
+Testsuite: autopkgtest-pkg-python
+Vcs-Git: https://salsa.debian.org/python-team/packages/pyflakes.git
+Vcs-Browser: https://salsa.debian.org/python-team/packages/pyflakes
+Rules-Requires-Root: no
+
+Package: pyflakes3
+Architecture: all
+Multi-Arch: foreign
+Depends: python3-pyflakes (=${binary:Version}),
+         ${misc:Depends},
+         ${python3:Depends},
+Breaks: pyflakes (<< 1.1.0-1)
+Replaces: pyflakes (<< 1.1.0-1)
+Description: passive checker of Python 3 programs
+ Pyflakes is program to analyze Python programs and detect various
+ errors. It works by parsing the source file, not importing it, so it
+ is safe to use on modules with side effects. It's also much faster.
+ .
+ Unlike PyLint, Pyflakes checks only for logical errors in programs;
+ it does not perform any checks on style.
+ .
+ This is the Python 3 command line `pyflakes3` program.
+
+Package: python3-pyflakes
+Architecture: all
+Replaces: pyflakes (<< 1.0.0-2~)
+Breaks: pyflakes (<< 1.0.0-2~),
+        python3-flake8 (<< 3.5.0),
+Recommends: pyflakes3
+Depends: python3-pkg-resources, ${misc:Depends}, ${python3:Depends}
+Description: passive checker of Python 3 programs - Python modules
+ Pyflakes is program to analyze Python programs and detect various
+ errors. It works by parsing the source file, not importing it, so it
+ is safe to use on modules with side effects. It's also much faster.
+ .
+ Unlike PyLint, Pyflakes checks only for logical errors in programs;
+ it does not perform any checks on style.
+ .
+ This is the Python 3 library version.

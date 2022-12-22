@@ -1,0 +1,5 @@
+Test-Command: pyflakes3 --help
+Depends: pyflakes3
+
+Tests: relative-import.sh
+Depends: python3-pyflakes
