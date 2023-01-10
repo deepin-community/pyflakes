@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+cp -a pyflakes/test/ "$AUTOPKGTEST_TMP"
+cd "$AUTOPKGTEST_TMP/test/"
+sed -i "s|return os.path.join(package_dir, '..', 'bin', 'pyflakes')|return '/usr/bin/pyflakes3'|" test_api.py
+for py in $(py3versions -s); do echo "[*] testing on $py:"; $py -m unittest discover 2>&1; done

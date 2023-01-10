@@ -29,6 +29,7 @@ pyflakes/test/test_dict.py
 pyflakes/test/test_doctests.py
 pyflakes/test/test_imports.py
 pyflakes/test/test_is_literal.py
+pyflakes/test/test_match.py
 pyflakes/test/test_other.py
 pyflakes/test/test_return_with_arguments_inside_generator.py
 pyflakes/test/test_type_annotations.py
