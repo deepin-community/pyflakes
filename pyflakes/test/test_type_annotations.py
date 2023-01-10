@@ -68,7 +68,6 @@ class TestTypeAnnotations(TestCase):
             return s
         """)
 
-    @skipIf(version_info < (3, 5), 'new in Python 3.5')
     def test_typingOverloadAsync(self):
         """Allow intentional redefinitions via @typing.overload (async)"""
         self.flakes("""
@@ -121,6 +120,23 @@ class TestTypeAnnotations(TestCase):
             def f(self, x): return x
         """)
 
+    def test_aliased_import(self):
+        """Detect when typing is imported as another name"""
+        self.flakes("""
+        import typing as t
+
+        @t.overload
+        def f(s):  # type: (None) -> None
+            pass
+
+        @t.overload
+        def f(s):  # type: (int) -> int
+            pass
+
+        def f(s):
+            return s
+        """)
+
     def test_not_a_typing_overload(self):
         """regression test for @typing.overload detection bug in 2.1.0"""
         self.flakes("""
@@ -135,7 +151,6 @@ class TestTypeAnnotations(TestCase):
                 pass
         """, m.RedefinedWhileUnused)
 
-    @skipIf(version_info < (3, 6), 'new in Python 3.6')
     def test_variable_annotations(self):
         self.flakes('''
         name: str
@@ -263,6 +278,14 @@ class TestTypeAnnotations(TestCase):
         class A: pass
         ''')
         self.flakes('''
+        T: object
+        def f(t: T): pass
+        ''', m.UndefinedName)
+        self.flakes('''
+        T: object
+        def g(t: 'T'): pass
+        ''')
+        self.flakes('''
         a: 'A B'
         ''', m.ForwardAnnotationSyntaxError)
         self.flakes('''
@@ -275,7 +298,71 @@ class TestTypeAnnotations(TestCase):
         a: 'a: "A"'
         ''', m.ForwardAnnotationSyntaxError)
 
-    @skipIf(version_info < (3, 5), 'new in Python 3.5')
+    def test_TypeAlias_annotations(self):
+        self.flakes("""
+        from typing_extensions import TypeAlias
+        from foo import Bar
+
+        bar: TypeAlias = Bar
+        """)
+        self.flakes("""
+        from typing_extensions import TypeAlias
+        from foo import Bar
+
+        bar: TypeAlias = 'Bar'
+        """)
+        self.flakes("""
+        from typing_extensions import TypeAlias
+        from foo import Bar
+
+        class A:
+            bar: TypeAlias = Bar
+        """)
+        self.flakes("""
+        from typing_extensions import TypeAlias
+        from foo import Bar
+
+        class A:
+            bar: TypeAlias = 'Bar'
+        """)
+        self.flakes("""
+        from typing_extensions import TypeAlias
+
+        bar: TypeAlias
+        """)
+        self.flakes("""
+        from typing_extensions import TypeAlias
+        from foo import Bar
+
+        bar: TypeAlias
+        """, m.UnusedImport)
+
+    def test_annotating_an_import(self):
+        self.flakes('''
+            from a import b, c
+            b: c
+            print(b)
+        ''')
+
+    def test_unused_annotation(self):
+        # Unused annotations are fine in module and class scope
+        self.flakes('''
+        x: int
+        class Cls:
+            y: int
+        ''')
+        # TODO: this should print a UnusedVariable message
+        self.flakes('''
+        def f():
+            x: int
+        ''')
+        # This should only print one UnusedVariable message
+        self.flakes('''
+        def f():
+            x: int
+            x = 3
+        ''', m.UnusedVariable)
+
     def test_annotated_async_def(self):
         self.flakes('''
         class c: pass
@@ -299,6 +386,25 @@ class TestTypeAnnotations(TestCase):
             b: Undefined
         class B: pass
         ''', m.UndefinedName)
+
+        self.flakes('''
+        from __future__ import annotations
+        T: object
+        def f(t: T): pass
+        def g(t: 'T'): pass
+        ''')
+
+    def test_type_annotation_clobbers_all(self):
+        self.flakes('''\
+        from typing import TYPE_CHECKING, List
+
+        from y import z
+
+        if not TYPE_CHECKING:
+            __all__ = ("z",)
+        else:
+            __all__: List[str]
+        ''')
 
     def test_typeCommentsMarkImportsAsUsed(self):
         self.flakes("""
@@ -405,13 +511,10 @@ class TestTypeAnnotations(TestCase):
         """, m.UndefinedName)
 
     def test_typeIgnoreBogusUnicode(self):
-        error = (m.CommentAnnotationSyntaxError if version_info < (3,)
-                 else m.UndefinedName)
         self.flakes("""
         x = 2  # type: ignore\xc3
-        """, error)
+        """, m.UndefinedName)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
     def test_return_annotation_is_class_scope_variable(self):
         self.flakes("""
         from typing import TypeVar
@@ -422,7 +525,6 @@ class TestTypeAnnotations(TestCase):
                 return x
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
     def test_return_annotation_is_function_body_variable(self):
         self.flakes("""
         class Test:
@@ -439,7 +541,6 @@ class TestTypeAnnotations(TestCase):
         def f(c: C, /): ...
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
     def test_partially_quoted_type_annotation(self):
         self.flakes("""
         from queue import Queue
@@ -475,7 +576,7 @@ class TestTypeAnnotations(TestCase):
     def test_type_cast_literal_str_to_str(self):
         # Checks that our handling of quoted type annotations in the first
         # argument to `cast` doesn't cause issues when (only) the _second_
-        # argument is a literal str which looks a bit like a type annoation.
+        # argument is a literal str which looks a bit like a type annotation.
         self.flakes("""
         from typing import cast
 
@@ -489,7 +590,21 @@ class TestTypeAnnotations(TestCase):
         maybe_int = tsac('Maybe[int]', 42)
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
+    def test_quoted_TypeVar_constraints(self):
+        self.flakes("""
+        from typing import TypeVar, Optional
+
+        T = TypeVar('T', 'str', 'Optional[int]', bytes)
+        """)
+
+    def test_quoted_TypeVar_bound(self):
+        self.flakes("""
+        from typing import TypeVar, Optional, List
+
+        T = TypeVar('T', bound='Optional[int]')
+        S = TypeVar('S', int, bound='List[int]')
+        """)
+
     def test_literal_type_typing(self):
         self.flakes("""
         from typing import Literal
@@ -498,7 +613,6 @@ class TestTypeAnnotations(TestCase):
             return None
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
     def test_literal_type_typing_extensions(self):
         self.flakes("""
         from typing_extensions import Literal
@@ -507,7 +621,38 @@ class TestTypeAnnotations(TestCase):
             return None
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
+    def test_annotated_type_typing_missing_forward_type(self):
+        self.flakes("""
+        from typing import Annotated
+
+        def f(x: Annotated['integer']) -> None:
+            return None
+        """, m.UndefinedName)
+
+    def test_annotated_type_typing_missing_forward_type_multiple_args(self):
+        self.flakes("""
+        from typing import Annotated
+
+        def f(x: Annotated['integer', 1]) -> None:
+            return None
+        """, m.UndefinedName)
+
+    def test_annotated_type_typing_with_string_args(self):
+        self.flakes("""
+        from typing import Annotated
+
+        def f(x: Annotated[int, '> 0']) -> None:
+            return None
+        """)
+
+    def test_annotated_type_typing_with_string_args_in_union(self):
+        self.flakes("""
+        from typing import Annotated, Union
+
+        def f(x: Union[Annotated['int', '>0'], 'integer']) -> None:
+            return None
+        """, m.UndefinedName)
+
     def test_literal_type_some_other_module(self):
         """err on the side of false-negatives for types named Literal"""
         self.flakes("""
@@ -520,7 +665,6 @@ class TestTypeAnnotations(TestCase):
             return None
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
     def test_literal_union_type_typing(self):
         self.flakes("""
         from typing import Literal
@@ -529,7 +673,6 @@ class TestTypeAnnotations(TestCase):
             return None
         """)
 
-    @skipIf(version_info < (3,), 'new in Python 3')
     def test_deferred_twice_annotation(self):
         self.flakes("""
             from queue import Queue
@@ -551,4 +694,103 @@ class TestTypeAnnotations(TestCase):
 
             def f() -> Optional['Queue[str]']:
                 return None
+        """)
+
+    def test_idomiatic_typing_guards(self):
+        # typing.TYPE_CHECKING: python3.5.3+
+        self.flakes("""
+            from typing import TYPE_CHECKING
+
+            if TYPE_CHECKING:
+                from t import T
+
+            def f():  # type: () -> T
+                pass
+        """)
+        # False: the old, more-compatible approach
+        self.flakes("""
+            if False:
+                from t import T
+
+            def f():  # type: () -> T
+                pass
+        """)
+        # some choose to assign a constant and do it that way
+        self.flakes("""
+            MYPY = False
+
+            if MYPY:
+                from t import T
+
+            def f():  # type: () -> T
+                pass
+        """)
+
+    def test_typing_guard_for_protocol(self):
+        self.flakes("""
+            from typing import TYPE_CHECKING
+
+            if TYPE_CHECKING:
+                from typing import Protocol
+            else:
+                Protocol = object
+
+            class C(Protocol):
+                def f():  # type: () -> int
+                    pass
+        """)
+
+    def test_typednames_correct_forward_ref(self):
+        self.flakes("""
+            from typing import TypedDict, List, NamedTuple
+
+            List[TypedDict("x", {})]
+            List[TypedDict("x", x=int)]
+            List[NamedTuple("a", a=int)]
+            List[NamedTuple("a", [("a", int)])]
+        """)
+        self.flakes("""
+            from typing import TypedDict, List, NamedTuple, TypeVar
+
+            List[TypedDict("x", {"x": "Y"})]
+            List[TypedDict("x", x="Y")]
+            List[NamedTuple("a", [("a", "Y")])]
+            List[NamedTuple("a", a="Y")]
+            List[TypedDict("x", {"x": List["a"]})]
+            List[TypeVar("A", bound="C")]
+            List[TypeVar("A", List["C"])]
+        """, *[m.UndefinedName]*7)
+        self.flakes("""
+            from typing import NamedTuple, TypeVar, cast
+            from t import A, B, C, D, E
+
+            NamedTuple("A", [("a", A["C"])])
+            TypeVar("A", bound=A["B"])
+            TypeVar("A", A["D"])
+            cast(A["E"], [])
+        """)
+
+    def test_namedtypes_classes(self):
+        self.flakes("""
+            from typing import TypedDict, NamedTuple
+            class X(TypedDict):
+                y: TypedDict("z", {"zz":int})
+
+            class Y(NamedTuple):
+                y: NamedTuple("v", [("vv", int)])
+        """)
+
+    @skipIf(version_info < (3, 11), 'new in Python 3.11')
+    def test_variadic_generics(self):
+        self.flakes("""
+            from typing import Generic
+            from typing import TypeVarTuple
+
+            Ts = TypeVarTuple('Ts')
+
+            class Shape(Generic[*Ts]): pass
+
+            def f(*args: *Ts) -> None: ...
+
+            def g(x: Shape[*Ts]) -> Shape[*Ts]: ...
         """)

@@ -3,3 +3,6 @@ Depends: pyflakes3
 
 Tests: relative-import.sh
 Depends: python3-pyflakes
+
+Tests: unittests
+Depends: pyflakes3, python3-all, python3-pyflakes
