@@ -1,3 +1,43 @@
+pyflakes (2.5.0-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release.
+  * Run unit tests with pytest to fix build time warning about `python3
+    setup.py test` deprecation.
+
+ -- Emanuele Rocca <ema@debian.org>  Thu, 01 Sep 2022 11:23:53 +0200
+
+pyflakes (2.4.0-3) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Remove constraints unnecessary since buster:
+    + pyflakes3: Drop versioned constraint on pyflakes in Replaces.
+    + pyflakes3: Drop versioned constraint on pyflakes in Breaks.
+    + python3-pyflakes: Drop versioned constraint on pyflakes in Replaces.
+    + python3-pyflakes: Drop versioned constraint on pyflakes and python3-flake8
+      in Breaks.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Thu, 26 May 2022 16:49:58 +0100
+
+pyflakes (2.4.0-2) unstable; urgency=medium
+
+  * Team upload.
+  * Fix CI tests of pyflakes3 binary
+
+ -- Scott Talbert <swt@techie.net>  Fri, 18 Feb 2022 10:09:47 -0500
+
+pyflakes (2.4.0-1) unstable; urgency=medium
+
+  * Team upload.
+  * Update to new upstream release 2.4.0 (Closes: #1002348)
+  * Update homepage (Closes: #974819)
+  * Drop BD on nose and just use built-in unittest
+  * Update Standards-Version to 4.6.0 (no changes needed)
+  * Run unittests as part of CI
+  * Update d/watch version to 4
+
+ -- Scott Talbert <swt@techie.net>  Thu, 17 Feb 2022 19:32:51 -0500
+
 pyflakes (2.2.0-3) unstable; urgency=medium
 
   [ Debian Janitor ]
