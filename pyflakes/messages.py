@@ -134,10 +134,6 @@ class MultiValueRepeatedKeyVariable(Message):
 class LateFutureImport(Message):
     message = 'from __future__ imports must occur at the beginning of the file'
 
-    def __init__(self, filename, loc):
-        Message.__init__(self, filename, loc)
-        self.message_args = ()
-
 
 class FutureFeatureNotDefined(Message):
     """An undefined __future__ feature name was imported."""
@@ -154,6 +150,18 @@ class UnusedVariable(Message):
     used.
     """
     message = 'local variable %r is assigned to but never used'
+
+    def __init__(self, filename, loc, names):
+        Message.__init__(self, filename, loc)
+        self.message_args = (names,)
+
+
+class UnusedAnnotation(Message):
+    """
+    Indicates that a variable has been explicitly annotated to but not actually
+    used.
+    """
+    message = 'local variable %r is annotated but never used'
 
     def __init__(self, filename, loc, names):
         Message.__init__(self, filename, loc)
@@ -188,13 +196,6 @@ class BreakOutsideLoop(Message):
     Indicates a break statement outside of a while or for loop.
     """
     message = '\'break\' outside loop'
-
-
-class ContinueInFinally(Message):
-    """
-    Indicates a continue statement in a finally block in a while or for loop.
-    """
-    message = '\'continue\' not supported inside \'finally\' clause'
 
 
 class DefaultExceptNotLast(Message):
@@ -234,14 +235,6 @@ class AssertTuple(Message):
 
 class ForwardAnnotationSyntaxError(Message):
     message = 'syntax error in forward annotation %r'
-
-    def __init__(self, filename, loc, annotation):
-        Message.__init__(self, filename, loc)
-        self.message_args = (annotation,)
-
-
-class CommentAnnotationSyntaxError(Message):
-    message = 'syntax error in type comment %r'
 
     def __init__(self, filename, loc, annotation):
         Message.__init__(self, filename, loc)

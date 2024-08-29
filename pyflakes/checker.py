@@ -7,7 +7,6 @@ Also, it models the Bindings and Scopes.
 import __future__
 import builtins
 import ast
-import bisect
 import collections
 import contextlib
 import doctest
@@ -16,11 +15,10 @@ import os
 import re
 import string
 import sys
-import tokenize
+import warnings
 
 from pyflakes import messages
 
-PY38_PLUS = sys.version_info >= (3, 8)
 PYPY = hasattr(sys, 'pypy_version_info')
 
 builtin_vars = dir(builtins)
@@ -31,21 +29,20 @@ parse_format_string = string.Formatter().parse
 def getAlternatives(n):
     if isinstance(n, ast.If):
         return [n.body]
-    if isinstance(n, ast.Try):
+    elif isinstance(n, ast.Try):
         return [n.body + n.orelse] + [[hdl] for hdl in n.handlers]
+    elif sys.version_info >= (3, 10) and isinstance(n, ast.Match):
+        return [mc.body for mc in n.cases]
 
 
 FOR_TYPES = (ast.For, ast.AsyncFor)
 
-if PY38_PLUS:
-    def _is_singleton(node):  # type: (ast.AST) -> bool
-        return (
-            isinstance(node, ast.Constant) and
-            isinstance(node.value, (bool, type(Ellipsis), type(None)))
-        )
-else:
-    def _is_singleton(node):  # type: (ast.AST) -> bool
-        return isinstance(node, (ast.NameConstant, ast.Ellipsis))
+
+def _is_singleton(node):  # type: (ast.AST) -> bool
+    return (
+        isinstance(node, ast.Constant) and
+        isinstance(node.value, (bool, type(Ellipsis), type(None)))
+    )
 
 
 def _is_tuple_constant(node):  # type: (ast.AST) -> bool
@@ -55,16 +52,8 @@ def _is_tuple_constant(node):  # type: (ast.AST) -> bool
     )
 
 
-if PY38_PLUS:
-    def _is_constant(node):
-        return isinstance(node, ast.Constant) or _is_tuple_constant(node)
-else:
-    def _is_constant(node):
-        return (
-            isinstance(node, (ast.Str, ast.Num, ast.Bytes)) or
-            _is_singleton(node) or
-            _is_tuple_constant(node)
-        )
+def _is_constant(node):
+    return isinstance(node, ast.Constant) or _is_tuple_constant(node)
 
 
 def _is_const_non_singleton(node):  # type: (ast.AST) -> bool
@@ -76,16 +65,6 @@ def _is_name_or_attr(node, name):  # type: (ast.AST, str) -> bool
         (isinstance(node, ast.Name) and node.id == name) or
         (isinstance(node, ast.Attribute) and node.attr == name)
     )
-
-
-# https://github.com/python/typed_ast/blob/1.4.0/ast27/Parser/tokenizer.c#L102-L104
-TYPE_COMMENT_RE = re.compile(r'^#\s*type:\s*')
-# https://github.com/python/typed_ast/blob/1.4.0/ast27/Parser/tokenizer.c#L1408-L1413
-ASCII_NON_ALNUM = ''.join([chr(i) for i in range(128) if not chr(i).isalnum()])
-TYPE_IGNORE_RE = re.compile(
-    TYPE_COMMENT_RE.pattern + fr'ignore([{ASCII_NON_ALNUM}]|$)')
-# https://github.com/python/typed_ast/blob/1.4.0/ast27/Grammar/Grammar#L147
-TYPE_FUNC_RE = re.compile(r'^(\(.*?\))\s*->\s*(.*)$')
 
 
 MAPPING_KEY_RE = re.compile(r'\(([^()]*)\)')
@@ -221,27 +200,12 @@ def iter_child_nodes(node, omit=None, _fields_order=_FieldsOrder()):
 
 
 def convert_to_value(item):
-    if isinstance(item, ast.Str):
-        return item.s
-    elif hasattr(ast, 'Bytes') and isinstance(item, ast.Bytes):
-        return item.s
+    if isinstance(item, ast.Constant):
+        return item.value
     elif isinstance(item, ast.Tuple):
         return tuple(convert_to_value(i) for i in item.elts)
-    elif isinstance(item, ast.Num):
-        return item.n
     elif isinstance(item, ast.Name):
-        result = VariableKey(item=item)
-        constants_lookup = {
-            'True': True,
-            'False': False,
-            'None': None,
-        }
-        return constants_lookup.get(
-            result.name,
-            result,
-        )
-    elif isinstance(item, ast.NameConstant):
-        return item.value
+        return VariableKey(item=item)
     else:
         return UnhandledKeyType()
 
@@ -286,6 +250,11 @@ class Definition(Binding):
     """
     A binding that defines a function or a class.
     """
+    def redefines(self, other):
+        return (
+            super().redefines(other) or
+            (isinstance(other, Assignment) and self.name == other.name)
+        )
 
 
 class Builtin(Definition):
@@ -533,8 +502,8 @@ class ExportBinding(Binding):
 
         def _add_to_names(container):
             for node in container.elts:
-                if isinstance(node, ast.Str):
-                    self.names.append(node.s)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    self.names.append(node.value)
 
         if isinstance(source.value, (ast.List, ast.Tuple)):
             _add_to_names(source.value)
@@ -586,9 +555,8 @@ class FunctionScope(Scope):
         # Simplify: manage the special locals as globals
         self.globals = self.alwaysUsed.copy()
         self.returnValue = None     # First non-empty return
-        self.isGenerator = False    # Detect a generator
 
-    def unusedAssignments(self):
+    def unused_assignments(self):
         """
         Return a generator for the assignments which have not been used.
         """
@@ -599,6 +567,18 @@ class FunctionScope(Scope):
                     not self.usesLocals and
                     isinstance(binding, Assignment)):
                 yield name, binding
+
+    def unused_annotations(self):
+        """
+        Return a generator for the annotations which have not been used.
+        """
+        for name, binding in self.items():
+            if not binding.used and isinstance(binding, Annotation):
+                yield name, binding
+
+
+class TypeScope(Scope):
+    pass
 
 
 class GeneratorScope(Scope):
@@ -613,13 +593,6 @@ class ModuleScope(Scope):
 
 class DoctestScope(ModuleScope):
     """Scope for a doctest."""
-
-
-class DummyNode:
-    """Used in place of an `ast.AST` to set error message positions"""
-    def __init__(self, lineno, col_offset):
-        self.lineno = lineno
-        self.col_offset = col_offset
 
 
 class DetectClassScopedMagic:
@@ -741,75 +714,8 @@ def in_string_annotation(func):
     return in_annotation_func
 
 
-def make_tokens(code):
-    # PY3: tokenize.tokenize requires readline of bytes
-    if not isinstance(code, bytes):
-        code = code.encode('UTF-8')
-    lines = iter(code.splitlines(True))
-    # next(lines, b'') is to prevent an error in pypy3
-    return tuple(tokenize.tokenize(lambda: next(lines, b'')))
-
-
-class _TypeableVisitor(ast.NodeVisitor):
-    """Collect the line number and nodes which are deemed typeable by
-    PEP 484
-
-    https://www.python.org/dev/peps/pep-0484/#type-comments
-    """
-    def __init__(self):
-        self.typeable_lines = []
-        self.typeable_nodes = {}
-
-    def _typeable(self, node):
-        # if there is more than one typeable thing on a line last one wins
-        self.typeable_lines.append(node.lineno)
-        self.typeable_nodes[node.lineno] = node
-
-        self.generic_visit(node)
-
-    visit_Assign = visit_For = visit_FunctionDef = visit_With = _typeable
-    visit_AsyncFor = visit_AsyncFunctionDef = visit_AsyncWith = _typeable
-
-
-def _collect_type_comments(tree, tokens):
-    visitor = _TypeableVisitor()
-    visitor.visit(tree)
-
-    type_comments = collections.defaultdict(list)
-    for tp, text, start, _, _ in tokens:
-        if (
-                tp != tokenize.COMMENT or  # skip non comments
-                not TYPE_COMMENT_RE.match(text) or  # skip non-type comments
-                TYPE_IGNORE_RE.match(text)  # skip ignores
-        ):
-            continue
-
-        # search for the typeable node at or before the line number of the
-        # type comment.
-        # if the bisection insertion point is before any nodes this is an
-        # invalid type comment which is ignored.
-        lineno, _ = start
-        idx = bisect.bisect_right(visitor.typeable_lines, lineno)
-        if idx == 0:
-            continue
-        node = visitor.typeable_nodes[visitor.typeable_lines[idx - 1]]
-        type_comments[node].append((start, text))
-
-    return type_comments
-
-
 class Checker:
-    """
-    I check the cleanliness and sanity of Python code.
-
-    @ivar _deferredFunctions: Tracking list used by L{deferFunction}.  Elements
-        of the list are two-tuples.  The first element is the callable passed
-        to L{deferFunction}.  The second element is a copy of the scope stack
-        at the time L{deferFunction} was called.
-
-    @ivar _deferredAssignments: Similar to C{_deferredFunctions}, but for
-        callables which are deferred assignment checks.
-    """
+    """I check the cleanliness and sanity of Python code."""
 
     _ast_node_scope = {
         ast.Module: ModuleScope,
@@ -826,7 +732,6 @@ class Checker:
     nodeDepth = 0
     offset = None
     _in_annotation = AnnotationState.NONE
-    _in_deferred = False
 
     builtIns = set(builtin_vars).union(_MAGIC_GLOBALS)
     _customBuiltIns = os.environ.get('PYFLAKES_BUILTINS')
@@ -834,42 +739,38 @@ class Checker:
         builtIns.update(_customBuiltIns.split(','))
     del _customBuiltIns
 
-    # TODO: file_tokens= is required to perform checks on type comments,
-    #       eventually make this a required positional argument.  For now it
-    #       is defaulted to `()` for api compatibility.
     def __init__(self, tree, filename='(none)', builtins=None,
                  withDoctest='PYFLAKES_DOCTEST' in os.environ, file_tokens=()):
         self._nodeHandlers = {}
-        self._deferredFunctions = []
-        self._deferredAssignments = []
+        self._deferred = collections.deque()
         self.deadScopes = []
         self.messages = []
         self.filename = filename
         if builtins:
             self.builtIns = self.builtIns.union(builtins)
         self.withDoctest = withDoctest
-        try:
-            self.scopeStack = [Checker._ast_node_scope[type(tree)]()]
-        except KeyError:
-            raise RuntimeError('No scope implemented for the node %r' % tree)
         self.exceptHandlers = [()]
         self.root = tree
-        self._type_comments = _collect_type_comments(tree, file_tokens)
-        for builtin in self.builtIns:
-            self.addBinding(None, Builtin(builtin))
-        self.handleChildren(tree)
-        self._in_deferred = True
-        self.runDeferred(self._deferredFunctions)
-        # Set _deferredFunctions to None so that deferFunction will fail
-        # noisily if called after we've run through the deferred functions.
-        self._deferredFunctions = None
-        self.runDeferred(self._deferredAssignments)
-        # Set _deferredAssignments to None so that deferAssignment will fail
-        # noisily if called after we've run through the deferred assignments.
-        self._deferredAssignments = None
-        del self.scopeStack[1:]
-        self.popScope()
+
+        self.scopeStack = []
+        try:
+            scope_tp = Checker._ast_node_scope[type(tree)]
+        except KeyError:
+            raise RuntimeError('No scope implemented for the node %r' % tree)
+
+        with self.in_scope(scope_tp):
+            for builtin in self.builtIns:
+                self.addBinding(None, Builtin(builtin))
+            self.handleChildren(tree)
+            self._run_deferred()
+
         self.checkDeadScopes()
+
+        if file_tokens:
+            warnings.warn(
+                '`file_tokens` will be removed in a future version',
+                stacklevel=2,
+            )
 
     def deferFunction(self, callable):
         """
@@ -880,23 +781,17 @@ class Checker:
         `callable` is called, the scope at the time this is called will be
         restored, however it will contain any new bindings added to it.
         """
-        self._deferredFunctions.append((callable, self.scopeStack[:], self.offset))
+        self._deferred.append((callable, self.scopeStack[:], self.offset))
 
-    def deferAssignment(self, callable):
-        """
-        Schedule an assignment handler to be called just after deferred
-        function handlers.
-        """
-        self._deferredAssignments.append((callable, self.scopeStack[:], self.offset))
+    def _run_deferred(self):
+        orig = (self.scopeStack, self.offset)
 
-    def runDeferred(self, deferred):
-        """
-        Run the callables in C{deferred} using their associated scope stack.
-        """
-        for handler, scope, offset in deferred:
-            self.scopeStack = scope
-            self.offset = offset
+        while self._deferred:
+            handler, scope, offset = self._deferred.popleft()
+            self.scopeStack, self.offset = scope, offset
             handler()
+
+        self.scopeStack, self.offset = orig
 
     def _in_doctest(self):
         return (len(self.scopeStack) >= 2 and
@@ -933,8 +828,13 @@ class Checker:
     def scope(self):
         return self.scopeStack[-1]
 
-    def popScope(self):
-        self.deadScopes.append(self.scopeStack.pop())
+    @contextlib.contextmanager
+    def in_scope(self, cls):
+        self.scopeStack.append(cls())
+        try:
+            yield
+        finally:
+            self.deadScopes.append(self.scopeStack.pop())
 
     def checkDeadScopes(self):
         """
@@ -945,6 +845,12 @@ class Checker:
             # imports in classes are public members
             if isinstance(scope, ClassScope):
                 continue
+
+            if isinstance(scope, FunctionScope):
+                for name, binding in scope.unused_assignments():
+                    self.report(messages.UnusedVariable, binding.source, name)
+                for name, binding in scope.unused_annotations():
+                    self.report(messages.UnusedAnnotation, binding.source, name)
 
             all_binding = scope.get('__all__')
             if all_binding and not isinstance(all_binding, ExportBinding):
@@ -995,9 +901,6 @@ class Checker:
                         else:
                             messg = messages.RedefinedWhileUnused
                         self.report(messg, node, value.name, value.source)
-
-    def pushScope(self, scopeClass=FunctionScope):
-        self.scopeStack.append(scopeClass())
 
     def report(self, messageClass, *args, **kwargs):
         self.messages.append(messageClass(self.filename, *args, **kwargs))
@@ -1135,12 +1038,17 @@ class Checker:
         )
         return handler
 
-    def handleNodeLoad(self, node):
+    def handleNodeLoad(self, node, parent):
         name = getNodeName(node)
         if not name:
             return
 
-        in_generators = None
+        # only the following can access class scoped variables (since classes
+        # aren't really a scope)
+        # - direct accesses (not within a nested scope)
+        # - generators
+        # - type annotations (for generics, etc.)
+        can_access_class_vars = None
         importStarred = None
 
         # try enclosing function scopes and global scope
@@ -1148,7 +1056,7 @@ class Checker:
             if isinstance(scope, ClassScope):
                 if name == '__class__':
                     return
-                elif in_generators is False:
+                elif can_access_class_vars is False:
                     # only generators used in a class scope can access the
                     # names of the class. this is skipped during the first
                     # iteration
@@ -1156,10 +1064,10 @@ class Checker:
 
             binding = scope.get(name, None)
             if isinstance(binding, Annotation) and not self._in_postponed_annotation:
+                scope[name].used = (self.scope, node)
                 continue
 
             if name == 'print' and isinstance(binding, Builtin):
-                parent = self.getParent(node)
                 if (isinstance(parent, ast.BinOp) and
                         isinstance(parent.op, ast.RShift)):
                     self.report(messages.InvalidPrintSyntax, node)
@@ -1183,8 +1091,10 @@ class Checker:
 
             importStarred = importStarred or scope.importStarred
 
-            if in_generators is not False:
-                in_generators = isinstance(scope, GeneratorScope)
+            if can_access_class_vars is not False:
+                can_access_class_vars = isinstance(
+                    scope, (TypeScope, GeneratorScope),
+                )
 
         if importStarred:
             from_list = []
@@ -1248,7 +1158,7 @@ class Checker:
                 )
         ):
             binding = ExportBinding(name, node._pyflakes_parent, self.scope)
-        elif PY38_PLUS and isinstance(parent_stmt, ast.NamedExpr):
+        elif isinstance(parent_stmt, ast.NamedExpr):
             binding = NamedExprAssignment(name, node)
         else:
             binding = Assignment(name, node)
@@ -1299,27 +1209,7 @@ class Checker:
             self.annotationsFutureEnabled
         )
 
-    def _handle_type_comments(self, node):
-        for (lineno, col_offset), comment in self._type_comments.get(node, ()):
-            comment = comment.split(':', 1)[1].strip()
-            func_match = TYPE_FUNC_RE.match(comment)
-            if func_match:
-                parts = (
-                    func_match.group(1).replace('*', ''),
-                    func_match.group(2).strip(),
-                )
-            else:
-                parts = (comment,)
-
-            for part in parts:
-                self.deferFunction(functools.partial(
-                    self.handleStringAnnotation,
-                    part, DummyNode(lineno, col_offset), lineno, col_offset,
-                    messages.CommentAnnotationSyntaxError,
-                ))
-
     def handleChildren(self, tree, omit=None):
-        self._handle_type_comments(tree)
         for node in iter_child_nodes(tree, omit=omit):
             self.handleNode(node, tree)
 
@@ -1335,22 +1225,21 @@ class Checker:
         Determine if the given node is a docstring, as long as it is at the
         correct place in the node tree.
         """
-        return isinstance(node, ast.Str) or (isinstance(node, ast.Expr) and
-                                             isinstance(node.value, ast.Str))
+        return (
+            isinstance(node, ast.Expr) and
+            isinstance(node.value, ast.Constant) and
+            isinstance(node.value.value, str)
+        )
 
     def getDocstring(self, node):
-        if isinstance(node, ast.Expr):
-            node = node.value
-        if not isinstance(node, ast.Str):
-            return (None, None)
-
-        if PYPY or PY38_PLUS:
-            doctest_lineno = node.lineno - 1
+        if (
+                isinstance(node, ast.Expr) and
+                isinstance(node.value, ast.Constant) and
+                isinstance(node.value.value, str)
+        ):
+            return node.value.value, node.lineno - 1
         else:
-            # Computed incorrectly if the docstring has backslash
-            doctest_lineno = node.lineno - node.s.count('\n') - 1
-
-        return (node.s, doctest_lineno)
+            return None, None
 
     def handleNode(self, node, parent):
         if node is None:
@@ -1358,8 +1247,12 @@ class Checker:
         if self.offset and getattr(node, 'lineno', None) is not None:
             node.lineno += self.offset[0]
             node.col_offset += self.offset[1]
-        if self.futuresAllowed and not (isinstance(node, ast.ImportFrom) or
-                                        self.isDocstring(node)):
+        if (
+                self.futuresAllowed and
+                self.nodeDepth == 0 and
+                not isinstance(node, ast.ImportFrom) and
+                not self.isDocstring(node)
+        ):
             self.futuresAllowed = False
         self.nodeDepth += 1
         node._pyflakes_depth = self.nodeDepth
@@ -1387,22 +1280,21 @@ class Checker:
         saved_stack = self.scopeStack
         self.scopeStack = [self.scopeStack[0]]
         node_offset = self.offset or (0, 0)
-        self.pushScope(DoctestScope)
-        if '_' not in self.scopeStack[0]:
-            self.addBinding(None, Builtin('_'))
-        for example in examples:
-            try:
-                tree = ast.parse(example.source, "<doctest>")
-            except SyntaxError as e:
-                position = (node_lineno + example.lineno + e.lineno,
-                            example.indent + 4 + (e.offset or 0))
-                self.report(messages.DoctestSyntaxError, node, position)
-            else:
-                self.offset = (node_offset[0] + node_lineno + example.lineno,
-                               node_offset[1] + example.indent + 4)
-                self.handleChildren(tree)
-                self.offset = node_offset
-        self.popScope()
+        with self.in_scope(DoctestScope):
+            if '_' not in self.scopeStack[0]:
+                self.addBinding(None, Builtin('_'))
+            for example in examples:
+                try:
+                    tree = ast.parse(example.source, "<doctest>")
+                except SyntaxError as e:
+                    position = (node_lineno + example.lineno + e.lineno,
+                                example.indent + 4 + (e.offset or 0))
+                    self.report(messages.DoctestSyntaxError, node, position)
+                else:
+                    self.offset = (node_offset[0] + node_lineno + example.lineno,
+                                   node_offset[1] + example.indent + 4)
+                    self.handleChildren(tree)
+                    self.offset = node_offset
         self.scopeStack = saved_stack
 
     @in_string_annotation
@@ -1429,21 +1321,27 @@ class Checker:
 
         self.handleNode(parsed_annotation, node)
 
+    def handle_annotation_always_deferred(self, annotation, parent):
+        fn = in_annotation(Checker.handleNode)
+        self.deferFunction(lambda: fn(self, annotation, parent))
+
     @in_annotation
     def handleAnnotation(self, annotation, node):
-        if isinstance(annotation, ast.Str):
+        if (
+                isinstance(annotation, ast.Constant) and
+                isinstance(annotation.value, str)
+        ):
             # Defer handling forward annotation.
             self.deferFunction(functools.partial(
                 self.handleStringAnnotation,
-                annotation.s,
+                annotation.value,
                 node,
                 annotation.lineno,
                 annotation.col_offset,
                 messages.ForwardAnnotationSyntaxError,
             ))
         elif self.annotationsFutureEnabled:
-            fn = in_annotation(Checker.handleNode)
-            self.deferFunction(lambda: fn(self, annotation, node))
+            self.handle_annotation_always_deferred(annotation, node)
         else:
             self.handleNode(annotation, node)
 
@@ -1500,7 +1398,7 @@ class Checker:
 
     def _handle_string_dot_format(self, node):
         try:
-            placeholders = tuple(parse_format_string(node.func.value.s))
+            placeholders = tuple(parse_format_string(node.func.value.value))
         except ValueError as e:
             self.report(messages.StringDotFormatInvalidFormat, node, e)
             return
@@ -1616,7 +1514,8 @@ class Checker:
     def CALL(self, node):
         if (
                 isinstance(node.func, ast.Attribute) and
-                isinstance(node.func.value, ast.Str) and
+                isinstance(node.func.value, ast.Constant) and
+                isinstance(node.func.value.value, str) and
                 node.func.attr == 'format'
         ):
             self._handle_string_dot_format(node)
@@ -1697,7 +1596,7 @@ class Checker:
 
     def _handle_percent_format(self, node):
         try:
-            placeholders = parse_percent_format(node.left.s)
+            placeholders = parse_percent_format(node.left.value)
         except ValueError:
             self.report(
                 messages.PercentFormatInvalidFormat,
@@ -1776,13 +1675,16 @@ class Checker:
 
         if (
                 isinstance(node.right, ast.Dict) and
-                all(isinstance(k, ast.Str) for k in node.right.keys)
+                all(
+                    isinstance(k, ast.Constant) and isinstance(k.value, str)
+                    for k in node.right.keys
+                )
         ):
             if positional and positional_count > 1:
                 self.report(messages.PercentFormatExpectedSequence, node)
                 return
 
-            substitution_keys = {k.s for k in node.right.keys}
+            substitution_keys = {k.value for k in node.right.keys}
             extra_keys = substitution_keys - named
             missing_keys = named - substitution_keys
             if not positional and extra_keys:
@@ -1801,32 +1703,23 @@ class Checker:
     def BINOP(self, node):
         if (
                 isinstance(node.op, ast.Mod) and
-                isinstance(node.left, ast.Str)
+                isinstance(node.left, ast.Constant) and
+                isinstance(node.left.value, str)
         ):
             self._handle_percent_format(node)
         self.handleChildren(node)
 
-    def STR(self, node):
-        if self._in_annotation:
+    def CONSTANT(self, node):
+        if isinstance(node.value, str) and self._in_annotation:
             fn = functools.partial(
                 self.handleStringAnnotation,
-                node.s,
+                node.value,
                 node,
                 node.lineno,
                 node.col_offset,
                 messages.ForwardAnnotationSyntaxError,
             )
-            if self._in_deferred:
-                fn()
-            else:
-                self.deferFunction(fn)
-
-    if PY38_PLUS:
-        def CONSTANT(self, node):
-            if isinstance(node.value, str):
-                return self.STR(node)
-    else:
-        NUM = BYTES = ELLIPSIS = CONSTANT = ignore
+            self.deferFunction(fn)
 
     # "slice" type nodes
     SLICE = EXTSLICE = INDEX = handleChildren
@@ -1954,9 +1847,8 @@ class Checker:
     NONLOCAL = GLOBAL
 
     def GENERATOREXP(self, node):
-        self.pushScope(GeneratorScope)
-        self.handleChildren(node)
-        self.popScope()
+        with self.in_scope(GeneratorScope):
+            self.handleChildren(node)
 
     LISTCOMP = DICTCOMP = SETCOMP = GENERATOREXP
 
@@ -1966,7 +1858,7 @@ class Checker:
         """
         # Locate the name in locals / function / globals scopes.
         if isinstance(node.ctx, ast.Load):
-            self.handleNodeLoad(node)
+            self.handleNodeLoad(node, self.getParent(node))
             if (node.id == 'locals' and isinstance(self.scope, FunctionScope) and
                     isinstance(node._pyflakes_parent, ast.Call)):
                 # we are doing locals() call in current scope
@@ -1992,11 +1884,6 @@ class Checker:
                     return
             if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
                 break
-            # Handle Try/TryFinally difference in Python < and >= 3.3
-            if hasattr(n, 'finalbody') and isinstance(node, ast.Continue):
-                if n_child in n.finalbody and not PY38_PLUS:
-                    self.report(messages.ContinueInFinally, node)
-                    return
         if isinstance(node, ast.Continue):
             self.report(messages.ContinueOutsideLoop, node)
         else:  # ast.Break
@@ -2022,7 +1909,6 @@ class Checker:
             self.report(messages.YieldOutsideFunction, node)
             return
 
-        self.scope.isGenerator = True
         self.handleNode(node.value, node)
 
     AWAIT = YIELDFROM = YIELD
@@ -2030,7 +1916,10 @@ class Checker:
     def FUNCTIONDEF(self, node):
         for deco in node.decorator_list:
             self.handleNode(deco, node)
-        self.LAMBDA(node)
+
+        with self._type_param_scope(node):
+            self.LAMBDA(node)
+
         self.addBinding(node, FunctionDefinition(node.name, node))
         # doctest does not process doctest within a doctest,
         # or in nested functions.
@@ -2045,10 +1934,9 @@ class Checker:
         args = []
         annotations = []
 
-        if PY38_PLUS:
-            for arg in node.args.posonlyargs:
-                args.append(arg.arg)
-                annotations.append(arg.annotation)
+        for arg in node.args.posonlyargs:
+            args.append(arg.arg)
+            annotations.append(arg.annotation)
         for arg in node.args.args + node.args.kwonlyargs:
             args.append(arg.arg)
             annotations.append(arg.annotation)
@@ -2079,20 +1967,11 @@ class Checker:
             self.handleNode(default, node)
 
         def runFunction():
-
-            self.pushScope()
-
-            self.handleChildren(node, omit=['decorator_list', 'returns'])
-
-            def checkUnusedAssignments():
-                """
-                Check to see if any assignments have not been used.
-                """
-                for name, binding in self.scope.unusedAssignments():
-                    self.report(messages.UnusedVariable, binding.source, name)
-            self.deferAssignment(checkUnusedAssignments)
-
-            self.popScope()
+            with self.in_scope(FunctionScope):
+                self.handleChildren(
+                    node,
+                    omit=('decorator_list', 'returns', 'type_params'),
+                )
 
         self.deferFunction(runFunction)
 
@@ -2110,24 +1989,26 @@ class Checker:
         """
         for deco in node.decorator_list:
             self.handleNode(deco, node)
-        for baseNode in node.bases:
-            self.handleNode(baseNode, node)
-        for keywordNode in node.keywords:
-            self.handleNode(keywordNode, node)
-        self.pushScope(ClassScope)
-        # doctest does not process doctest within a doctest
-        # classes within classes are processed.
-        if (self.withDoctest and
-                not self._in_doctest() and
-                not isinstance(self.scope, FunctionScope)):
-            self.deferFunction(lambda: self.handleDoctests(node))
-        for stmt in node.body:
-            self.handleNode(stmt, node)
-        self.popScope()
+
+        with self._type_param_scope(node):
+            for baseNode in node.bases:
+                self.handleNode(baseNode, node)
+            for keywordNode in node.keywords:
+                self.handleNode(keywordNode, node)
+            with self.in_scope(ClassScope):
+                # doctest does not process doctest within a doctest
+                # classes within classes are processed.
+                if (self.withDoctest and
+                        not self._in_doctest() and
+                        not isinstance(self.scope, FunctionScope)):
+                    self.deferFunction(lambda: self.handleDoctests(node))
+                for stmt in node.body:
+                    self.handleNode(stmt, node)
+
         self.addBinding(node, ClassDefinition(node.name, node))
 
     def AUGASSIGN(self, node):
-        self.handleNodeLoad(node.target)
+        self.handleNodeLoad(node.target, node)
         self.handleNode(node.value, node)
         self.handleNode(node.target, node)
 
@@ -2265,7 +2146,6 @@ class Checker:
             self.scope[node.name] = prev_definition
 
     def ANNASSIGN(self, node):
-        self.handleNode(node.target, node)
         self.handleAnnotation(node.annotation, node)
         # If the assignment has value, handle the *value* now.
         if node.value:
@@ -2274,6 +2154,7 @@ class Checker:
                 self.handleAnnotation(node.value, node)
             else:
                 self.handleNode(node.value, node)
+        self.handleNode(node.target, node)
 
     def COMPARE(self, node):
         left = node.left
@@ -2297,3 +2178,23 @@ class Checker:
         self.handleChildren(node)
 
     MATCHAS = MATCHMAPPING = MATCHSTAR = _match_target
+
+    @contextlib.contextmanager
+    def _type_param_scope(self, node):
+        with contextlib.ExitStack() as ctx:
+            if sys.version_info >= (3, 12):
+                ctx.enter_context(self.in_scope(TypeScope))
+                for param in node.type_params:
+                    self.handleNode(param, node)
+            yield
+
+    def TYPEVAR(self, node):
+        self.handleNodeStore(node)
+        self.handle_annotation_always_deferred(node.bound, node)
+
+    PARAMSPEC = TYPEVARTUPLE = handleNodeStore
+
+    def TYPEALIAS(self, node):
+        self.handleNode(node.name, node)
+        with self._type_param_scope(node):
+            self.handle_annotation_always_deferred(node.value, node)

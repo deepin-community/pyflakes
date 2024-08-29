@@ -1,3 +1,19 @@
+pyflakes (3.2.0-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release.
+
+ -- Benjamin Drung <bdrung@debian.org>  Thu, 29 Feb 2024 14:05:22 +0100
+
+pyflakes (3.1.0-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release.
+    - Add support for PEP 695 and python 3.12 (Closes: #1042339)
+  * Bump Standards-Version to 4.6.2
+
+ -- Benjamin Drung <bdrung@debian.org>  Thu, 07 Dec 2023 14:03:34 +0100
+
 pyflakes (2.5.0-1) unstable; urgency=medium
 
   * Team upload.
