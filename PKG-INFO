@@ -1,29 +1,23 @@
 Metadata-Version: 2.1
 Name: pyflakes
-Version: 2.5.0
+Version: 3.2.0
 Summary: passive checker of Python programs
 Home-page: https://github.com/PyCQA/pyflakes
 Author: A lot of people
 Author-email: code-quality@python.org
 License: MIT
-Platform: UNKNOWN
 Classifier: Development Status :: 6 - Mature
 Classifier: Environment :: Console
 Classifier: Intended Audience :: Developers
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python
 Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: Python :: 3.6
-Classifier: Programming Language :: Python :: 3.7
-Classifier: Programming Language :: Python :: 3.8
-Classifier: Programming Language :: Python :: 3.9
-Classifier: Programming Language :: Python :: 3.10
 Classifier: Programming Language :: Python :: 3 :: Only
 Classifier: Programming Language :: Python :: Implementation :: CPython
 Classifier: Programming Language :: Python :: Implementation :: PyPy
 Classifier: Topic :: Software Development
 Classifier: Topic :: Utilities
-Requires-Python: >=3.6
+Requires-Python: >=3.8
 License-File: LICENSE
 
 ========
@@ -52,11 +46,11 @@ It can be installed with::
 Useful tips:
 
 * Be sure to install it for a version of Python which is compatible
-  with your codebase: for Python 2, ``pip2 install pyflakes`` and for
-  Python3, ``pip3 install pyflakes``.
+  with your codebase: ``python#.# -m pip install pyflakes`` (for example,
+  ``python3.10 -m pip install pyflakes``)
 
-* You can also invoke Pyflakes with ``python3 -m pyflakes .`` or
-  ``python2 -m pyflakes .`` if you have it installed for both versions.
+* You can also invoke Pyflakes with ``python#.# -m pyflakes .`` if you want
+  to run it for a specific python version.
 
 * If you require more options and more flexibility, you could give a
   look to Flake8_ too.
@@ -90,9 +84,9 @@ Contributing
 
 Issues are tracked on `GitHub <https://github.com/PyCQA/pyflakes/issues>`_.
 
-Patches may be submitted via a `GitHub pull request`_ or via the mailing list
-if you prefer. If you are comfortable doing so, please `rebase your changes`_
-so they may be applied to master with a fast-forward merge, and each commit is
+Patches may be submitted via a `GitHub pull request`_.
+If you are comfortable doing so, please `rebase your changes`_
+so they may be applied to main with a fast-forward merge, and each commit is
 a coherent unit of work with a well-written log message.  If you are not
 comfortable with this rebase workflow, the project maintainers will be happy to
 rebase your commits for you.
@@ -112,6 +106,4 @@ All changes should include tests and pass flake8_.
 Changelog
 ---------
 
-Please see `NEWS.rst <https://github.com/PyCQA/pyflakes/blob/master/NEWS.rst>`_.
-
-
+Please see `NEWS.rst <https://github.com/PyCQA/pyflakes/blob/main/NEWS.rst>`_.

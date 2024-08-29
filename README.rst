@@ -24,11 +24,11 @@ It can be installed with::
 Useful tips:
 
 * Be sure to install it for a version of Python which is compatible
-  with your codebase: for Python 2, ``pip2 install pyflakes`` and for
-  Python3, ``pip3 install pyflakes``.
+  with your codebase: ``python#.# -m pip install pyflakes`` (for example,
+  ``python3.10 -m pip install pyflakes``)
 
-* You can also invoke Pyflakes with ``python3 -m pyflakes .`` or
-  ``python2 -m pyflakes .`` if you have it installed for both versions.
+* You can also invoke Pyflakes with ``python#.# -m pyflakes .`` if you want
+  to run it for a specific python version.
 
 * If you require more options and more flexibility, you could give a
   look to Flake8_ too.
@@ -62,9 +62,9 @@ Contributing
 
 Issues are tracked on `GitHub <https://github.com/PyCQA/pyflakes/issues>`_.
 
-Patches may be submitted via a `GitHub pull request`_ or via the mailing list
-if you prefer. If you are comfortable doing so, please `rebase your changes`_
-so they may be applied to master with a fast-forward merge, and each commit is
+Patches may be submitted via a `GitHub pull request`_.
+If you are comfortable doing so, please `rebase your changes`_
+so they may be applied to main with a fast-forward merge, and each commit is
 a coherent unit of work with a well-written log message.  If you are not
 comfortable with this rebase workflow, the project maintainers will be happy to
 rebase your commits for you.
@@ -84,4 +84,4 @@ All changes should include tests and pass flake8_.
 Changelog
 ---------
 
-Please see `NEWS.rst <https://github.com/PyCQA/pyflakes/blob/master/NEWS.rst>`_.
+Please see `NEWS.rst <https://github.com/PyCQA/pyflakes/blob/main/NEWS.rst>`_.
